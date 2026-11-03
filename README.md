@@ -2,7 +2,7 @@
 
 A Joomla 4, 5 and 6 component that exposes a [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server over HTTP JSON-RPC. It lets MCP clients such as Claude Desktop and Cursor work with Joomla content through the site's own Joomla Web Services API.
 
-**Version:** 1.11.0 · **Requires:** Joomla 4, 5 or 6 · PHP 8.1+ · **Licence:** GPL-2.0-or-later
+**Version:** 1.10.2 · **Requires:** Joomla 4, 5 or 6 · PHP 8.1+ · **Licence:** GPL-2.0-or-later
 
 ## Features
 
@@ -20,7 +20,7 @@ A Joomla 4, 5 and 6 component that exposes a [Model Context Protocol (MCP)](http
 
 ## MCP Tools
 
-The component exposes 95 tools grouped by Joomla domain. List tools include a `pagination` object (`total_count`, `count`, `offset`, `has_more`, `next_offset`) so agents can page through large result sets. Write tools use Joomla's Web Services API where possible; a small number of behaviours not exposed cleanly through Web Services (custom module HTML writes, multilingual associations, template file editing) are handled through Joomla's database or filesystem APIs.
+The component exposes 90 tools grouped by Joomla domain. List tools include a `pagination` object (`total_count`, `count`, `offset`, `has_more`, `next_offset`) so agents can page through large result sets. Write tools use Joomla's Web Services API where possible; a small number of behaviours not exposed cleanly through Web Services (custom module HTML writes, multilingual associations, template file editing) are handled through Joomla's database or filesystem APIs.
 
 ### Articles
 
@@ -57,18 +57,6 @@ The component exposes 95 tools grouped by Joomla domain. List tools include a `p
 | Tool | Description |
 |---|---|
 | `create_contact` | Create a Joomla contact in a contact category (requires the Web Services - Contact plugin) |
-
-### Redirects
-
-| Tool | Description |
-|---|---|
-| `list_redirects` | List redirect links, filtered by text, state, status code or missing destination (collected 404s) and sorted by any column, e.g. by hits |
-| `get_redirect` | Retrieve a redirect link by ID |
-| `create_redirect` | Create a redirect link from a source URL to a destination URL |
-| `update_redirect` | Update a redirect link; only the fields sent change |
-| `delete_redirect` | Delete a redirect link (trashes first, then deletes) |
-
-Joomla only acts on redirect links while the **System - Redirect** plugin is enabled, which it is not on a fresh install, and only for requests that would otherwise return 404. Use `list_extensions` and `set_extension_state` to check and enable it. Status codes other than 301, and links with no destination, need the Redirect component's Advanced Mode. Joomla's Web Services API lists enabled and disabled links only, never archived or trashed ones.
 
 ### Article versions
 
@@ -125,8 +113,6 @@ Article versioning tools require Joomla article versioning to be enabled.
 | `update_media` | Rename, move or replace an existing media file or folder |
 | `delete_media` | Delete a Joomla media file or folder by path |
 
-To upload a file from the client's computer, pass its path as `local_path`, e.g. `upload_media {"path": "banners/logo.png", "local_path": "~/Pictures/logo.png"}`. The bundled bridge (`mcp-http-bridge.js`, also inside the `.mcpb` Claude Desktop extension) reads the file and sends it as `content`. The model writes only the path, so a file costs a few tokens and never needs a separate `curl` step. `local_path` is marked in the tool schema with `x-mcp-local-file`, and `update_media` and `install_extension` accept it too. A client that connects over HTTP without the bridge gets an error naming the alternatives (`source_url`, or base64 `content` for small files). The request carries the file base64-encoded, so PHP's `post_max_size` caps the size at about three quarters of its value (413 when exceeded), and com_media's own *Maximum Size* and allowed-extension options still apply.
-
 ### Content languages
 
 | Tool | Description |
@@ -172,24 +158,16 @@ To upload a file from the client's computer, pass its path as `local_path`, e.g.
 
 | Tool | Description |
 |---|---|
-| `list_extensions` | List installed extensions (components, modules, plugins, templates, languages, …) |
+| `list_extensions` | List installed extensions (components, modules, plugins, templates, languages, …) with their installed versions |
 | `set_extension_state` | Enable or disable an installed extension (e.g. activate a plugin after installing it) |
 | `get_extension_params` | Read an extension's saved Options, plus the option definitions its manifest declares (name, type, default, list options) |
 | `update_extension_params` | Update an extension's saved Options, merging into the stored values — only the keys you send change |
-| `install_extension` | Install a Joomla extension from a download URL, a zip already on the server (`source_path`, e.g. one staged with `task=rpc.upload`) or a small base64 zip (arbitrary code execution — restrict to trusted callers) |
+| `install_extension` | Install a Joomla extension from a base64 zip or a download URL (arbitrary code execution — restrict to trusted callers) |
 | `uninstall_extension` | Uninstall an extension by `extension_id` (protected/locked core extensions are refused) |
+| `list_update_sites` | List update sites (System → Update Sites) with the extensions each one serves and whether a Download Key is set, masked |
+| `set_update_site_key` | Set or clear an update site's Download Key, stored the way Joomla's Update Site form stores it |
 
-`install_extension`, `uninstall_extension` and `update_template_file` are **disabled by default** because they allow code execution on the server. Remove them from the Disabled Tools list in the component options to opt in. The extension params tools and the custom field tools are disabled by default too, for different reasons — see below.
-
-A tool argument cannot carry a large file: the model would have to write the whole package out as base64. Through the bundled bridge, pass the zip's path as `local_path` (see [Media](#media)). Otherwise, to install a zip from the client's disk, upload it to the same endpoint with `task=rpc.upload` and the same `Authorization` header, then pass the returned `source_path` to `install_extension`:
-
-```bash
-curl -H "Authorization: Bearer $MCP_BEARER_TOKEN" -F file=@tpl_example.zip \
-  "https://example.com/index.php?option=com_mcpserver&task=rpc.upload"
-# {"source_path":"/var/www/tmp/mcp-upload-3f9c….zip","size":482113}
-```
-
-The upload is refused (403) whenever `install_extension` would be: while it is disabled, in read-only mode, or in Governed Mode for a user without site-wide `core.admin`. A staged package can be installed once, is deleted when it is, and otherwise expires after an hour. PHP's `upload_max_filesize` and `post_max_size` limit its size (413 when exceeded).
+`install_extension`, `uninstall_extension` and `update_template_file` are **disabled by default** because they allow code execution on the server. Remove them from the Disabled Tools list in the component options to opt in. The extension params tools, `set_update_site_key` and the custom field tools are disabled by default too, for different reasons — see below.
 
 #### Extension Options
 
@@ -201,6 +179,16 @@ Identify the extension by `extension_id` (from `list_extensions`) or by `element
 - **Read first.** `get_extension_params` also returns `option_definitions`, read from the extension's own manifest (`config.xml` for a component, the installation manifest for everything else): the key names, types, defaults and list options. An extension whose Options have never been saved stores an empty `params` object even though its manifest declares defaults, so this is how you learn what it accepts. Keys the manifest does not declare are still written, and reported back in `unknown_keys` so a typo is visible.
 - **Module and template *instances* are elsewhere.** Use `update_module` or `update_template_style` for those; these tools change the extension row, not an instance.
 - **Secrets are masked.** Values of manifest fields typed `password` are returned as `********` and listed in `redacted_keys`. Extensions with no manifest on disk have no definitions to consult, so nothing is masked for them.
+
+#### Update Sites and Download Keys
+
+`list_update_sites` and `set_update_site_key` cover Joomla's **System → Update Sites** screen, which the Web Services API does not expose. Commercial extensions declare a `<dlid prefix="…" suffix="…"/>` element in their installation manifest, and Joomla stores the customer's Download Key in the update site's `extra_query`, wrapped in that prefix and suffix, then sends it with every update check and download. Deploying a commercial extension and entering its key otherwise means a round-trip through the backend.
+
+- **Keys are masked.** `download_key` reports `supported` (an extension the site serves declares `<dlid>`), `is_set`, the `prefix` and `suffix`, and `masked`: the key's last four characters, or none of it for a key shorter than 12. The raw `extra_query` is never returned.
+- **Writes follow Joomla.** `set_update_site_key` stores `prefix + key + suffix` as the whole of `extra_query`, exactly as the Update Site edit form does, and refuses a site whose extensions declare no `<dlid>` — Joomla shows no Download Key field for those. An empty `download_key` clears the key. Keys containing whitespace, control characters, `&` or `#` are refused, because Joomla appends `extra_query` to the update URL unencoded.
+- **The write is gated.** `set_update_site_key` is **disabled by default**, since a Download Key is a licence credential, and requires site-wide `core.admin` in Governed Mode. `list_update_sites` is enabled by default and requires `core.manage` on `com_installer`, as Joomla's own screen does.
+
+`list_extensions` and `list_update_sites` report each extension's installed `version`, read from the `manifest_cache` Joomla records at install time (`null` when it is empty).
 - **The MCP server's own component is refused**, for reading and for writing. Its options hold the bearer token and the Joomla API token, and they carry the policy — read-only mode, Disabled Tools, authentication — that gates these tools. Change them in the administrator.
 
 Both are **disabled by default**, for a third reason than the code-execution and custom field tools: an extension's Options are where third-party extensions keep their credentials, so reading them is a disclosure risk, and writing them reconfigures the site. In Governed Mode both require site-wide `core.admin`, matching Joomla's own gating of Options screens.
@@ -269,7 +257,7 @@ Two Joomla behaviours are worth knowing before using them. `update_field` merges
 
 ### Not covered (by design)
 
-User management, Joomla global configuration, contacts and banners are deliberately not exposed as tools. User accounts and global configuration in particular would widen the blast radius of a leaked bearer token well beyond content management. If your workflow needs one of these domains, open an issue — they are candidates for opt-in tools in a future release.
+User management, Joomla global configuration, contacts, banners and redirects are deliberately not exposed as tools. User accounts and global configuration in particular would widen the blast radius of a leaked bearer token well beyond content management. If your workflow needs one of these domains, open an issue — they are candidates for opt-in tools in a future release.
 
 ## MCP Resources
 
@@ -325,7 +313,7 @@ Key settings:
 - `Allowed Origins`: comma-separated browser origins allowed to call the endpoint. A request carrying any other `Origin` header is refused with HTTP 403, as the MCP specification requires to prevent DNS rebinding. That includes the site's own origin, which must be listed to be trusted: Joomla derives it from the request's `Host` header, which a rebinding page controls. Clients that send no `Origin` (desktop clients, the bridge) are unaffected.
 - `Trusted Proxies`: comma-separated proxy IPs trusted for `X-Forwarded-For`.
 - `Read-Only Mode`: when enabled, only read-only tools may run; every tool that writes, deletes or installs anything is blocked.
-- `Disabled Tools`: comma- or newline-separated MCP tool names to block (e.g. `delete_article`). Defaults to the code-execution tools (`install_extension`, `uninstall_extension`, `update_template_file`), the custom field tools and the extension params tools (`get_extension_params`, `update_extension_params`); remove them to opt in, or enter `none` to allow all tools (an emptied field reverts to the defaults when saved).
+- `Disabled Tools`: comma- or newline-separated MCP tool names to block (e.g. `delete_article`). Defaults to the code-execution tools (`install_extension`, `uninstall_extension`, `update_template_file`), the custom field tools, the extension params tools (`get_extension_params`, `update_extension_params`) and `set_update_site_key`; remove them to opt in, or enter `none` to allow all tools (an emptied field reverts to the defaults when saved).
 - `Enable Resources`: when enabled (the default), MCP clients can list and read recent published articles as `joomla://article/{id}` resources.
 - `Enable Prompts`: when enabled (the default), MCP clients can use the draft, SEO audit and translate article prompts.
 - `Rate Limit Requests` and `Rate Limit Window`: fixed-window rate limit settings.
@@ -428,7 +416,6 @@ Disabling **Governed Mode** in **Options → Security Settings** is the rollback
 | Method | Path | Description |
 |---|---|---|
 | `POST` | `/index.php?option=com_mcpserver&task=rpc.handle` | MCP JSON-RPC endpoint in the site application (Streamable HTTP, every protocol version) |
-| `POST` | `/index.php?option=com_mcpserver&task=rpc.upload` | Stage an extension package (multipart field `file`) for `install_extension`'s `source_path` |
 | `GET` | `/index.php?option=com_mcpserver&task=rpc.sse` | Legacy HTTP+SSE stream for 2024-11-05 clients (the bundled bridge does not use it) |
 | `GET` | `/index.php?option=com_mcpserver&task=health.ping` | Site health endpoint |
 | `POST` | `/administrator/index.php?option=com_mcpserver&task=rpc.handle` | MCP JSON-RPC endpoint in the administrator application |
@@ -449,7 +436,7 @@ For `2026-07-28` requests:
 - Results carry `resultType: "complete"` and the server's name and version in `_meta`. `server/discover`, `tools/list`, `prompts/list` and `resources/templates/list` add `ttlMs: 300000` and `cacheScope: "public"`; `resources/list` and `resources/read` add the **Cache TTL** option (in milliseconds) and `cacheScope: "private"`, because in Governed Mode they are read with the caller's own token.
 - `subscriptions/listen` is answered as an event stream: an acknowledgement with an empty filter, then the closing result. The server advertises no change notifications (`listChanged` and `subscribe` are false), so it ends the stream at once rather than holding a PHP worker open; clients should re-fetch on the `ttlMs` hints rather than reconnect.
 - `structuredContent` may be any JSON value. For earlier revisions it is sent only when the result is a JSON object; the text content always carries the full result.
-- Tools whose schema marks `id`, `version_id`, `extension_id` or `catid` with `x-mcp-header` (52 tools) also need the matching `Mcp-Param-Id`, `Mcp-Param-Version-Id`, `Mcp-Param-Extension-Id` or `Mcp-Param-Catid` header whenever that argument is sent, so gateways can route or audit on the target without reading the body. A missing or mismatched header gets HTTP 400 with `-32020`. The bundled bridge sends them.
+- Tools whose schema marks `id`, `version_id`, `extension_id` or `catid` with `x-mcp-header` (48 tools) also need the matching `Mcp-Param-Id`, `Mcp-Param-Version-Id`, `Mcp-Param-Extension-Id` or `Mcp-Param-Catid` header whenever that argument is sent, so gateways can route or audit on the target without reading the body. A missing or mismatched header gets HTTP 400 with `-32020`. The bundled bridge sends them.
 
 For every revision:
 

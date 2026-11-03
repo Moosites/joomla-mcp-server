@@ -94,6 +94,10 @@ final class ToolAccessPolicy
         'get_extension_params' => ['kind' => self::DIRECT, 'component' => null, 'action' => 'core.admin'],
         'update_extension_params' => ['kind' => self::DIRECT, 'component' => null, 'action' => 'core.admin'],
         'uninstall_extension' => ['kind' => self::DIRECT, 'component' => null, 'action' => 'core.admin'],
+        // Joomla serves Update Sites to com_installer core.manage. Writing a Download Key
+        // stores a credential, so it takes site-wide core.admin like the params tools.
+        'list_update_sites' => ['kind' => self::DIRECT, 'component' => 'com_installer', 'action' => 'core.manage'],
+        'set_update_site_key' => ['kind' => self::DIRECT, 'component' => null, 'action' => 'core.admin'],
         'create_menu' => ['kind' => self::API, 'component' => null, 'action' => null],
         'delete_menu_item' => ['kind' => self::API, 'component' => null, 'action' => null],
         'create_module' => ['kind' => self::DIRECT, 'component' => 'com_modules', 'action' => 'core.create'],
@@ -121,11 +125,6 @@ final class ToolAccessPolicy
         'reorder_fields' => ['kind' => self::API, 'component' => null, 'action' => null],
         'get_item_field_values' => ['kind' => self::API, 'component' => null, 'action' => null],
         'set_item_field_values' => ['kind' => self::API, 'component' => null, 'action' => null],
-        'list_redirects' => ['kind' => self::API, 'component' => null, 'action' => null],
-        'get_redirect' => ['kind' => self::API, 'component' => null, 'action' => null],
-        'create_redirect' => ['kind' => self::API, 'component' => null, 'action' => null],
-        'update_redirect' => ['kind' => self::API, 'component' => null, 'action' => null],
-        'delete_redirect' => ['kind' => self::API, 'component' => null, 'action' => null],
     ];
 
     /** @return list<string> */
