@@ -2,14 +2,15 @@
 
 All notable release changes for MCP Server for Joomla are recorded here.
 
-## 1.11.0 - 2026-11-02
+## Unreleased
 
-- Added five redirect management tools (`list_redirects`, `get_redirect`, `create_redirect`, `update_redirect`, `delete_redirect`) covering `com_redirect`, including filtering and sorting across all redirect links (such as unresolved 404s sorted by hits) and automatic trashing before permanent deletion.
-- Added `local_path` to `upload_media`, `update_media` and `install_extension`: when connected through the bundled bridge, the bridge reads the file from the client's disk and sends it as base64 `content` without the file's bytes passing through the model.
-- Added a `POST` `task=rpc.upload` endpoint that stages a multipart `file` upload in `tmp_path` and returns a single-use `source_path` for `install_extension`.
-- Fixed the media tools (`list_media`, `get_media`, `upload_media`, `update_media`, `delete_media`) only seeing and accepting images: they now pass every configured `com_media` media type (`mediatypes`), so audio, video and document files (such as PDFs and MP4s) can be listed, uploaded, replaced and deleted.
-- Fixed prefix-based cache invalidation (`JoomlaCache::deleteByPrefix()`) never removing cached entries.
-- Requests whose body is discarded by PHP because `Content-Length` exceeds `post_max_size` now return HTTP 413 with a clear message naming `post_max_size` instead of a misleading JSON parse error.
+- Added `list_update_sites`, which lists Joomla's update sites (System → Update Sites) with the installed extensions each one serves, and `set_update_site_key`, which sets or clears an update site's Download Key. The Web Services API does not expose update sites, so entering the licence key of a freshly deployed commercial extension previously meant a round-trip through the backend.
+- `set_update_site_key` stores the key wrapped in the prefix and suffix the extension's `<dlid>` element declares, as the whole of `extra_query`, exactly as Joomla's Update Site form does. It refuses a site whose extensions declare no `<dlid>`, and keys containing whitespace, control characters, `&` or `#`, which Joomla would append to the update URL unencoded.
+- Download Keys are masked on read and in the write's response: only the last four characters are shown, and none of a key shorter than 12. The raw `extra_query` is never returned.
+- `set_update_site_key` is **disabled by default** and requires site-wide `core.admin` in Governed Mode, since a Download Key is a licence credential. `list_update_sites` is enabled by default and requires `core.manage` on `com_installer`, matching Joomla's own screen.
+- `list_extensions` now reports each extension's installed `version`, from `#__extensions.manifest_cache`.
+- `update_site_id` is now an `x-mcp-header` parameter (`Mcp-Param-Update-Site-Id`) and is recorded as a call's target in the governance audit trail and the Joomla Action Log, alongside `id`, `extension_id` and the others.
+- Sites that saved their Disabled Tools option before upgrading keep their saved list, so `set_update_site_key` is enabled there until it is added to the list, as with every tool that has joined the default.
 
 ## 1.10.2 - 2026-10-21
 

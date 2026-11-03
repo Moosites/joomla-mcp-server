@@ -24,7 +24,8 @@ class PolicyService
      * field destroys every value stored against it. The extension params tools are
      * here for a third: an extension's Options are where third-party extensions
      * keep their secrets, so reading them is a credential disclosure risk and
-     * writing them reconfigures the site. Admins opt in selectively by
+     * writing them reconfigures the site. set_update_site_key is here for the same
+     * reason: a Download Key is a licence credential. Admins opt in selectively by
      * removing names from the option. Mirrors the fail-closed reasoning in
      * AuthService: config.xml defaults are only persisted once the options are
      * saved, so the same default must be applied here for fresh installs.
@@ -33,7 +34,7 @@ class PolicyService
         . 'list_field_groups get_field_group create_field_group update_field_group delete_field_group '
         . 'reorder_field_groups list_fields get_field find_field_by_name create_field update_field '
         . 'delete_field reorder_fields get_item_field_values set_item_field_values '
-        . 'get_extension_params update_extension_params';
+        . 'get_extension_params update_extension_params set_update_site_key';
 
     /**
      * Sentinel the admin enters to explicitly disable nothing. Required because

@@ -37,7 +37,7 @@ final class GovernedToolAuthorizerTest extends TestCase
         $registered = array_column((new ToolRegistry())->getAll(), 'name');
 
         $this->assertSame($registered, $catalog->toolNames());
-        $this->assertCount(95, $catalog->toolNames());
+        $this->assertCount(92, $catalog->toolNames());
     }
 
     public function testDeniedDirectCallDoesNotExecute(): void

@@ -231,7 +231,9 @@ class RpcService
             'get_extension_params'          => fn(array $p) => $this->getExtensionParams($p),
             'update_extension_params'       => fn(array $p) => $this->updateExtensionParams($p),
             'uninstall_extension'           => fn(array $p) => $this->uninstallExtension($p),
-            'create_menu'                   => fn(array $p) => $this->createMenu($p),
+            'list_update_sites'             => fn(array $p) => $this->listUpdateSites($p),
+            'set_update_site_key'           => fn(array $p) => $this->setUpdateSiteKey($p),
+            'create_menu'                 => fn(array $p) => $this->createMenu($p),
             'delete_menu_item'              => fn(array $p) => $this->deleteMenuItem($p),
             'create_module'                 => fn(array $p) => $this->createModule($p),
             'delete_module'                 => fn(array $p) => $this->deleteModule($p),
@@ -255,11 +257,6 @@ class RpcService
             'reorder_fields'                => fn(array $p) => $this->reorderFields($p),
             'get_item_field_values'         => fn(array $p) => $this->getItemFieldValues($p),
             'set_item_field_values'         => fn(array $p) => $this->setItemFieldValues($p),
-            'list_redirects'                => fn(array $p) => $this->listRedirects($p),
-            'get_redirect'                  => fn(array $p) => $this->getRedirect($p),
-            'create_redirect'               => fn(array $p) => $this->createRedirect($p),
-            'update_redirect'               => fn(array $p) => $this->updateRedirect($p),
-            'delete_redirect'               => fn(array $p) => $this->deleteRedirect($p),
         ];
 
         foreach ($executors as $name => $executor) {
@@ -2697,45 +2694,9 @@ class RpcService
         return $result;
     }
 
-    /**
-     * Media type code → the com_media option listing its extensions, and the
-     * default Joomla's media ApiModel falls back to when the option is unset.
-     */
-    private const MEDIA_TYPE_EXTENSION_OPTIONS = [
-        '0' => ['image_extensions', 'bmp,gif,jpg,jpeg,png,webp'],
-        '1' => ['audio_extensions', 'mp3,m4a,mp4a,ogg'],
-        '2' => ['video_extensions', 'mp4,mp4v,mpeg,mov,webm'],
-        '3' => ['doc_extensions', 'doc,odg,odp,ods,odt,pdf,ppt,txt,xcf,xls,csv'],
-    ];
-
-    private ?string $mediaTypes = null;
-
-    /**
-     * The "mediatypes" value for Joomla's media API: every type with extensions
-     * configured in the Media options. The API accepts only the types it is
-     * given and assumes images only when there is none, so listing would hide
-     * videos and PDFs and every other call would refuse them as "File type not
-     * allowed". Which extensions each type covers stays Joomla's decision.
-     */
-    private function mediaTypes(): string
-    {
-        if ($this->mediaTypes === null) {
-            $params = \Joomla\CMS\Component\ComponentHelper::getParams('com_media');
-            $types = [];
-            foreach (self::MEDIA_TYPE_EXTENSION_OPTIONS as $code => [$option, $default]) {
-                if (trim((string) $params->get($option, $default), " ,") !== '') {
-                    $types[] = (string) $code;
-                }
-            }
-            $this->mediaTypes = implode(',', $types);
-        }
-
-        return $this->mediaTypes;
-    }
-
     private function listMedia(array $params): array
     {
-        $query = ['mediatypes' => $this->mediaTypes()];
+        $query = [];
         if (isset($params['path']) && $params['path'] !== '') {
             $query['path'] = (string) $params['path'];
         }
@@ -2765,7 +2726,7 @@ class RpcService
             throw new \InvalidArgumentException('path is required');
         }
 
-        $query = ['mediatypes' => $this->mediaTypes()];
+        $query = [];
         if (($params['include_url'] ?? true)) {
             $query['url'] = 1;
         }
@@ -2788,10 +2749,10 @@ class RpcService
 
         $content = $this->resolveMediaContent($params);
         if ($content === null) {
-            throw new \InvalidArgumentException('One of local_path, source_url or content is required');
+            throw new \InvalidArgumentException('Either content or source_url is required');
         }
 
-        $result = $this->rest->post('api/index.php/v1/media/files?mediatypes=' . $this->mediaTypes(), [
+        $result = $this->rest->post('api/index.php/v1/media/files', [
             'path' => $path,
             'content' => $content,
         ]);
@@ -2831,13 +2792,10 @@ class RpcService
         }
 
         if (empty($payload)) {
-            throw new \InvalidArgumentException('Provide at least one of new_path, local_path, source_url or content');
+            throw new \InvalidArgumentException('Provide at least one of new_path, content or source_url');
         }
 
-        $result = $this->rest->patch(
-            'api/index.php/v1/media/files/' . $this->mediaItemPath($path) . '?mediatypes=' . $this->mediaTypes(),
-            $payload
-        );
+        $result = $this->rest->patch('api/index.php/v1/media/files/' . $this->mediaItemPath($path), $payload);
         $this->cache->deleteByPrefix('media_');
         return $this->withoutEchoedMediaContent($result);
     }
@@ -2849,22 +2807,6 @@ class RpcService
      * which MCP clients truncate or reject; the agent then reports a failed upload and retries
      * into "File exists" although the first call succeeded.
      */
-    /**
-     * local_path names a file on the client's machine, which the bundled bridge
-     * swaps for "content" before the call is sent. Reaching the server means the
-     * client connects without the bridge, and the path means nothing here.
-     */
-    private function assertNoUnresolvedLocalPath(array $params): void
-    {
-        if (isset($params['local_path']) && $params['local_path'] !== '') {
-            throw new \InvalidArgumentException(
-                'local_path is read by the bundled MCP bridge (mcp-http-bridge.js or the Claude Desktop extension), '
-                . 'and this client is not connected through it. Use source_url, or base64 content for small files, '
-                . 'or connect the client through the bridge.'
-            );
-        }
-    }
-
     private function withoutEchoedMediaContent(array $result): array
     {
         unset($result['data']['attributes']['content']);
@@ -2879,15 +2821,13 @@ class RpcService
             throw new \InvalidArgumentException('path is required');
         }
 
-        $result = $this->rest->delete('api/index.php/v1/media/files/' . $this->mediaItemPath($path) . '?mediatypes=' . $this->mediaTypes());
+        $result = $this->rest->delete('api/index.php/v1/media/files/' . $this->mediaItemPath($path));
         $this->cache->deleteByPrefix('media_');
         return $result;
     }
 
     private function resolveMediaContent(array $params): ?string
     {
-        $this->assertNoUnresolvedLocalPath($params);
-
         $hasContent = isset($params['content']) && $params['content'] !== '';
         $hasUrl = isset($params['source_url']) && $params['source_url'] !== '';
 
@@ -2970,10 +2910,6 @@ class RpcService
     private const CATEGORIES_PATH = 'api/index.php/v1/content/categories';
     private const TAGS_PATH = 'api/index.php/v1/tags';
     private const CONTACTS_PATH = 'api/index.php/v1/contacts';
-    private const REDIRECTS_PATH = 'api/index.php/v1/redirects';
-    private const REDIRECT_STRING_COLUMNS = ['old_url', 'new_url', 'comment'];
-    private const REDIRECT_INT_COLUMNS = ['published', 'header'];
-    private const REDIRECT_ORDER_COLUMNS = ['id', 'old_url', 'hits', 'created_date', 'modified_date'];
     private const CONTACT_OPTIONAL_FIELDS = [
         'alias', 'con_position', 'email_to', 'telephone', 'mobile', 'fax', 'webpage', 'address',
         'suburb', 'state', 'postcode', 'country', 'misc', 'image', 'metadesc', 'note',
@@ -3679,8 +3615,6 @@ class RpcService
 
     private function resolveExtensionPackageBytes(array $params): string
     {
-        $this->assertNoUnresolvedLocalPath($params);
-
         $hasContent = isset($params['content']) && $params['content'] !== '';
         $hasUrl     = isset($params['source_url']) && $params['source_url'] !== '';
         $hasPath    = isset($params['source_path']) && $params['source_path'] !== '';
@@ -3754,9 +3688,6 @@ class RpcService
             throw new \RuntimeException('Failed to read source_path');
         }
 
-        // A package staged by task=rpc.upload is single-use.
-        (new PackageUploadService((string) Factory::getApplication()->get('tmp_path')))->consume($real);
-
         return $bytes;
     }
 
@@ -3776,7 +3707,7 @@ class RpcService
                 $query = $db->getQuery(true)
                     ->select($db->quoteName([
                         'extension_id', 'name', 'type', 'element', 'folder',
-                        'client_id', 'enabled', 'protected', 'locked',
+                        'client_id', 'enabled', 'protected', 'locked', 'manifest_cache',
                     ]))
                     ->from($db->quoteName('#__extensions'))
                     ->order(
@@ -3821,6 +3752,7 @@ class RpcService
                         'enabled'      => (int) $row['enabled'] === 1,
                         'protected'    => (int) $row['protected'] === 1,
                         'locked'       => (int) $row['locked'] === 1,
+                        'version'      => $this->manifestCacheVersion($row['manifest_cache'] ?? null),
                     ];
                 }
 
@@ -4355,6 +4287,319 @@ class RpcService
                 'messages'     => $messages,
             ],
         ];
+    }
+
+    /**
+     * Joomla's System → Update Sites screen, which the Web Services API does not
+     * expose. A commercial extension's Download Key lives in the site's extra_query,
+     * wrapped in the prefix and suffix its manifest's <dlid> element declares; it is
+     * reported masked, so a licence key never leaves the site whole.
+     *
+     * Filtering happens here rather than in SQL: a site has a handful of update
+     * sites, and it keeps the three queries plain lookups by ID.
+     */
+    private function listUpdateSites(array $params): array
+    {
+        $sites = $this->loadUpdateSiteRows(null);
+        $links = $this->loadUpdateSiteLinks(array_map('intval', array_column($sites, 'update_site_id')));
+        $extensions = $this->loadUpdateSiteExtensions($links);
+
+        $enabled = isset($params['enabled']) && $params['enabled'] !== '' ? ((int) $params['enabled'] === 1) : null;
+        $extensionId = (int) ($params['extension_id'] ?? 0);
+        $search = strtolower(trim((string) ($params['search'] ?? '')));
+
+        $data = [];
+        foreach ($sites as $site) {
+            $siteId = (int) $site['update_site_id'];
+            $served = array_values(array_intersect_key($extensions, array_flip($links[$siteId] ?? [])));
+
+            if ($enabled !== null && ((int) $site['enabled'] === 1) !== $enabled) {
+                continue;
+            }
+            if ($extensionId > 0 && !in_array($extensionId, $links[$siteId] ?? [], true)) {
+                continue;
+            }
+            if ($search !== ''
+                && !str_contains(strtolower((string) $site['name']), $search)
+                && !str_contains(strtolower((string) $site['location']), $search)
+                && array_filter($served, static fn (array $ext): bool => str_contains(strtolower((string) $ext['element']), $search)) === []
+            ) {
+                continue;
+            }
+
+            $data[] = $this->describeUpdateSite($site, $served);
+        }
+
+        usort($data, static fn (array $a, array $b): int => strcasecmp($a['name'], $b['name']));
+
+        return $this->withPaginationMetadata(['data' => $data], $params);
+    }
+
+    /**
+     * Writes the key the way Joomla's own Update Site form does: the prefix and
+     * suffix from the extension's <dlid> element around the key, as the whole of
+     * extra_query. A site whose extensions declare no <dlid> is refused, because
+     * Joomla neither shows a Download Key field for it nor expects one.
+     */
+    private function setUpdateSiteKey(array $params): array
+    {
+        $siteId = (int) ($params['update_site_id'] ?? 0);
+        if ($siteId <= 0) {
+            throw new \InvalidArgumentException('update_site_id is required');
+        }
+        if (!array_key_exists('download_key', $params)) {
+            throw new \InvalidArgumentException('download_key is required; send an empty string to clear the key');
+        }
+
+        $key = trim((string) ($params['download_key'] ?? ''));
+        // Joomla appends extra_query to the update and download URLs unencoded, so
+        // these would split or truncate the query string the update server receives.
+        if ($key !== '' && preg_match('/[\s&#\x00-\x1F\x7F]/', $key) === 1) {
+            throw new \InvalidArgumentException(
+                'download_key may not contain whitespace, control characters, "&" or "#": '
+                . 'Joomla appends it to the update URL unencoded'
+            );
+        }
+
+        $sites = $this->loadUpdateSiteRows($siteId);
+        if ($sites === []) {
+            throw new \InvalidArgumentException('Update site #' . $siteId . ' not found — check list_update_sites');
+        }
+
+        $site = $sites[0];
+        $links = $this->loadUpdateSiteLinks([$siteId]);
+        $served = array_values($this->loadUpdateSiteExtensions($links));
+        $format = $this->downloadKeyFormat($served);
+
+        if ($format === null) {
+            throw new \InvalidArgumentException(
+                'No extension served by update site #' . $siteId . ' declares a <dlid> element in its manifest, '
+                . 'so Joomla does not send a Download Key to it'
+            );
+        }
+
+        $update = new \stdClass();
+        $update->update_site_id = $siteId;
+        $update->extra_query = $key === '' ? '' : $format['prefix'] . $key . $format['suffix'];
+
+        Factory::getDbo()->updateObject('#__update_sites', $update, 'update_site_id');
+
+        $site['extra_query'] = $update->extra_query;
+
+        return ['data' => $this->describeUpdateSite($site, $served)];
+    }
+
+    /**
+     * @return list<array<string, mixed>>
+     */
+    private function loadUpdateSiteRows(?int $siteId): array
+    {
+        $db = Factory::getDbo();
+        $query = $db->getQuery(true)
+            ->select($db->quoteName([
+                'update_site_id', 'name', 'type', 'location', 'enabled', 'last_check_timestamp', 'extra_query',
+            ]))
+            ->from($db->quoteName('#__update_sites'));
+
+        if ($siteId !== null) {
+            $query->where($db->quoteName('update_site_id') . ' = ' . $siteId);
+        }
+
+        return $db->setQuery($query)->loadAssocList() ?: [];
+    }
+
+    /**
+     * @param   list<int>  $siteIds
+     *
+     * @return  array<int, list<int>>  extension IDs keyed by update site ID
+     */
+    private function loadUpdateSiteLinks(array $siteIds): array
+    {
+        if ($siteIds === []) {
+            return [];
+        }
+
+        $db = Factory::getDbo();
+        $query = $db->getQuery(true)
+            ->select($db->quoteName(['update_site_id', 'extension_id']))
+            ->from($db->quoteName('#__update_sites_extensions'))
+            ->where($db->quoteName('update_site_id') . ' IN (' . implode(',', $siteIds) . ')');
+
+        $links = [];
+        foreach ($db->setQuery($query)->loadAssocList() ?: [] as $row) {
+            $links[(int) $row['update_site_id']][] = (int) $row['extension_id'];
+        }
+
+        return $links;
+    }
+
+    /**
+     * @param   array<int, list<int>>  $links
+     *
+     * @return  array<int, array<string, mixed>>  #__extensions rows keyed by extension ID
+     */
+    private function loadUpdateSiteExtensions(array $links): array
+    {
+        $ids = array_values(array_unique(array_merge([], ...array_values($links))));
+        if ($ids === []) {
+            return [];
+        }
+
+        $db = Factory::getDbo();
+        $query = $db->getQuery(true)
+            ->select($db->quoteName([
+                'extension_id', 'name', 'type', 'element', 'folder', 'client_id', 'enabled', 'manifest_cache',
+            ]))
+            ->from($db->quoteName('#__extensions'))
+            ->where($db->quoteName('extension_id') . ' IN (' . implode(',', $ids) . ')');
+
+        $rows = [];
+        foreach ($db->setQuery($query)->loadAssocList() ?: [] as $row) {
+            $rows[(int) $row['extension_id']] = $row;
+        }
+
+        return $rows;
+    }
+
+    /**
+     * @param   array<string, mixed>        $site
+     * @param   list<array<string, mixed>>  $served  #__extensions rows linked to the site
+     *
+     * @return  array<string, mixed>
+     */
+    private function describeUpdateSite(array $site, array $served): array
+    {
+        $timestamp = (int) ($site['last_check_timestamp'] ?? 0);
+
+        return [
+            'update_site_id' => (int) $site['update_site_id'],
+            'name'           => (string) $site['name'],
+            'type'           => (string) $site['type'],
+            'location'       => (string) $site['location'],
+            'enabled'        => (int) $site['enabled'] === 1,
+            'last_check'     => $timestamp > 0 ? gmdate('Y-m-d\TH:i:s\Z', $timestamp) : null,
+            'extensions'     => array_map(
+                fn (array $row): array => [
+                    'extension_id' => (int) $row['extension_id'],
+                    'name'         => (string) $row['name'],
+                    'type'         => (string) $row['type'],
+                    'element'      => (string) $row['element'],
+                    'version'      => $this->manifestCacheVersion($row['manifest_cache'] ?? null),
+                ],
+                $served
+            ),
+            'download_key'   => $this->describeDownloadKey((string) ($site['extra_query'] ?? ''), $served),
+        ];
+    }
+
+    /**
+     * Mirrors InstallerHelper::getDownloadKey(): the key is what remains of
+     * extra_query once the <dlid> prefix and suffix are stripped. Only the last
+     * four characters are shown, and none of a key too short for that to be safe.
+     *
+     * @param   list<array<string, mixed>>  $served
+     *
+     * @return  array<string, mixed>
+     */
+    private function describeDownloadKey(string $extraQuery, array $served): array
+    {
+        $format = $this->downloadKeyFormat($served);
+
+        if ($format === null) {
+            return ['supported' => false, 'is_set' => $extraQuery !== ''];
+        }
+
+        $key = substr($extraQuery, strlen($format['prefix']));
+        if ($format['suffix'] !== '' && str_ends_with($key, $format['suffix'])) {
+            $key = substr($key, 0, -strlen($format['suffix']));
+        }
+
+        return [
+            'supported' => true,
+            'prefix'    => $format['prefix'],
+            'suffix'    => $format['suffix'],
+            'is_set'    => $key !== '',
+            'masked'    => $key === '' ? null : (strlen($key) >= 12 ? '********' . substr($key, -4) : '********'),
+        ];
+    }
+
+    /**
+     * The <dlid> prefix and suffix declared by the first served extension whose
+     * installation manifest has one, or null when none does.
+     *
+     * @param   list<array<string, mixed>>  $served
+     *
+     * @return  array{prefix: string, suffix: string}|null
+     */
+    private function downloadKeyFormat(array $served): ?array
+    {
+        foreach ($served as $row) {
+            $path = $this->installationManifestPath($row);
+            if ($path === null) {
+                continue;
+            }
+
+            $previous = libxml_use_internal_errors(true);
+            $xml = simplexml_load_file($path);
+            libxml_clear_errors();
+            libxml_use_internal_errors($previous);
+
+            if ($xml instanceof \SimpleXMLElement && isset($xml->dlid)) {
+                return [
+                    'prefix' => (string) ($xml->dlid['prefix'] ?? ''),
+                    'suffix' => (string) ($xml->dlid['suffix'] ?? ''),
+                ];
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Where Joomla keeps an extension's installation manifest, mirroring
+     * InstallerHelper::getInstallationXML(). Unlike extensionManifestPath(), a
+     * component resolves to its manifest rather than its config.xml, because
+     * <dlid> is declared there.
+     *
+     * @param  array<string, mixed>  $row
+     */
+    private function installationManifestPath(array $row): ?string
+    {
+        $element = (string) ($row['element'] ?? '');
+        $folder = (string) ($row['folder'] ?? '');
+
+        if (!$this->isSafePathSegment($element) || ($folder !== '' && !$this->isSafePathSegment($folder))) {
+            return null;
+        }
+
+        $client = (int) ($row['client_id'] ?? 0) === 1 ? JPATH_ADMINISTRATOR : JPATH_ROOT;
+
+        $path = match ((string) ($row['type'] ?? '')) {
+            'package'   => JPATH_ADMINISTRATOR . '/manifests/packages/' . $element . '.xml',
+            'component' => JPATH_ADMINISTRATOR . '/components/' . $element . '/' . preg_replace('/^com_/', '', $element) . '.xml',
+            'plugin'    => $folder === ''
+                ? null
+                : JPATH_ROOT . '/plugins/' . $folder . '/' . $element . '/' . $element . '.xml',
+            'module'    => $client . '/modules/' . $element . '/' . $element . '.xml',
+            'template'  => $client . '/templates/' . $element . '/templateDetails.xml',
+            'library'   => JPATH_ADMINISTRATOR . '/manifests/libraries/' . $element . '.xml',
+            'file'      => JPATH_ADMINISTRATOR . '/manifests/files/' . $element . '.xml',
+            default     => null,
+        };
+
+        return $path !== null && is_file($path) ? $path : null;
+    }
+
+    /**
+     * The installed version Joomla recorded in #__extensions.manifest_cache, or null
+     * when the column is empty or unreadable.
+     */
+    private function manifestCacheVersion(mixed $raw): ?string
+    {
+        $decoded = is_string($raw) && $raw !== '' ? json_decode($raw, true) : null;
+        $version = is_array($decoded) ? ($decoded['version'] ?? null) : null;
+
+        return is_scalar($version) && (string) $version !== '' ? (string) $version : null;
     }
 
     /**
@@ -4917,7 +5162,7 @@ class RpcService
         if (count($allIds) === 1) {
             // Caller wants to clear associations; just remove rows for the primary.
             $this->deleteAssociationsForIds($context, $allIds);
-            $this->invalidateAssociationCaches($context);
+            $this->cache->deleteByPrefix($this->associationCachePrefix($context));
             return $this->loadAssociations($context, $primaryId);
         }
 
@@ -4960,22 +5205,8 @@ class RpcService
             $db->insertObject('#__associations', $row);
         }
 
-        $this->invalidateAssociationCaches($context);
-        return $this->loadAssociations($context, $primaryId);
-    }
-
-    /**
-     * Joomla's article and menu item API output embeds each item's associations, so the
-     * cached single-item reads go stale alongside the association lists.
-     */
-    private function invalidateAssociationCaches(string $context): void
-    {
         $this->cache->deleteByPrefix($this->associationCachePrefix($context));
-        if ($context === self::ASSOC_CONTEXT_ARTICLE) {
-            $this->cache->deleteByPrefix('article:');
-        } elseif ($context === self::ASSOC_CONTEXT_MENU_ITEM) {
-            $this->cache->deleteByPrefix('menu_item:');
-        }
+        return $this->loadAssociations($context, $primaryId);
     }
 
     private function loadItemsForAssociation(string $context, array $ids): array
@@ -5217,149 +5448,6 @@ class RpcService
         $this->cache->delete('tag:' . $id);
         $this->cache->deleteByPrefix('tags_list:');
         return $result;
-    }
-
-    private function listRedirects(array $params): array
-    {
-        // Joomla's redirect API builds its list model with ignore_request, so filter[] and
-        // list[] parameters are silently dropped. Fetch every page once and filter and sort here.
-        $links = $this->cache->remember('redirects_list:all', fn () => $this->withRedirectRoute(
-            fn () => $this->fetchAllPages(self::REDIRECTS_PATH)
-        ));
-        $limitReached = count($links) >= self::FETCH_ALL_PAGES_CAP;
-
-        $search = trim((string) ($params['search'] ?? ''));
-        $links = array_values(array_filter($links, static function ($link) use ($params, $search): bool {
-            $attributes = is_array($link['attributes'] ?? null) ? $link['attributes'] : [];
-            $newUrl = trim((string) ($attributes['new_url'] ?? ''));
-
-            if ($search !== '') {
-                $haystack = (string) ($attributes['old_url'] ?? '') . "\n" . $newUrl . "\n" . (string) ($attributes['comment'] ?? '');
-                if (mb_stripos($haystack, $search) === false) {
-                    return false;
-                }
-            }
-
-            if (isset($params['published']) && (int) ($attributes['published'] ?? 0) !== (int) $params['published']) {
-                return false;
-            }
-
-            if (isset($params['header']) && (int) ($attributes['header'] ?? 0) !== (int) $params['header']) {
-                return false;
-            }
-
-            return !isset($params['unresolved']) || ($newUrl === '') === (bool) $params['unresolved'];
-        }));
-
-        $orderBy = in_array($params['order_by'] ?? null, self::REDIRECT_ORDER_COLUMNS, true) ? $params['order_by'] : 'old_url';
-        $descending = ($params['direction'] ?? 'asc') === 'desc';
-        usort($links, static function ($a, $b) use ($orderBy, $descending): int {
-            $left = $a['attributes'][$orderBy] ?? null;
-            $right = $b['attributes'][$orderBy] ?? null;
-            $cmp = in_array($orderBy, ['id', 'hits'], true)
-                ? (int) $left <=> (int) $right
-                : strcasecmp((string) $left, (string) $right);
-
-            return $descending ? -$cmp : $cmp;
-        });
-
-        $response = ['data' => $links];
-        if ($limitReached) {
-            $response['links_limit_reached'] = true;
-        }
-
-        return $this->withPaginationMetadata($response, $params);
-    }
-
-    private function getRedirect(array $params): array
-    {
-        $id = (int) ($params['id'] ?? 0);
-        if ($id <= 0) {
-            throw new \InvalidArgumentException('id is required');
-        }
-
-        return $this->cache->remember('redirect:' . $id, fn () => $this->rest->get(self::REDIRECTS_PATH . '/' . $id));
-    }
-
-    private function createRedirect(array $params): array
-    {
-        $oldUrl = trim((string) ($params['old_url'] ?? ''));
-        if ($oldUrl === '') {
-            throw new \InvalidArgumentException('old_url is required');
-        }
-
-        // new_url is nullable and only optional in Advanced Mode, so it is sent only when given
-        // and LinkTable::check() reports a missing destination in Joomla's own words.
-        $payload = array_merge(
-            ['published' => 1, 'header' => 301],
-            $this->buildFieldPayload($params, self::REDIRECT_STRING_COLUMNS, self::REDIRECT_INT_COLUMNS),
-            ['old_url' => $oldUrl]
-        );
-
-        $result = $this->withRedirectRoute(fn () => $this->rest->post(self::REDIRECTS_PATH, $payload));
-        $this->cache->deleteByPrefix('redirects_list:');
-        return $result;
-    }
-
-    private function updateRedirect(array $params): array
-    {
-        $id = (int) ($params['id'] ?? 0);
-        if ($id <= 0) {
-            throw new \InvalidArgumentException('id is required');
-        }
-
-        $this->requireFieldUpdates($params, array_merge(self::REDIRECT_STRING_COLUMNS, self::REDIRECT_INT_COLUMNS));
-
-        // Joomla's PATCH handler backfills every #__redirect_links column the body omits, so a
-        // partial payload is safe here.
-        $result = $this->rest->patch(
-            self::REDIRECTS_PATH . '/' . $id,
-            $this->buildFieldPayload($params, self::REDIRECT_STRING_COLUMNS, self::REDIRECT_INT_COLUMNS)
-        );
-        $this->cache->delete('redirect:' . $id);
-        $this->cache->deleteByPrefix('redirects_list:');
-        return $result;
-    }
-
-    private function deleteRedirect(array $params): array
-    {
-        $id = (int) ($params['id'] ?? 0);
-        if ($id <= 0) {
-            throw new \InvalidArgumentException('id is required');
-        }
-
-        // LinkModel::canDelete refuses any link that is not trashed (published -2).
-        $current = $this->rest->get(self::REDIRECTS_PATH . '/' . $id);
-        if ((int) ($current['data']['attributes']['published'] ?? 0) !== -2) {
-            $this->rest->patch(self::REDIRECTS_PATH . '/' . $id, ['published' => -2]);
-        }
-
-        $result = $this->rest->delete(self::REDIRECTS_PATH . '/' . $id);
-        $this->cache->delete('redirect:' . $id);
-        $this->cache->deleteByPrefix('redirects_list:');
-        return $result;
-    }
-
-    /**
-     * A 404 on the redirects collection cannot mean "record missing", so the route itself is
-     * absent: core registers it from plg_webservices_redirect.
-     */
-    private function withRedirectRoute(callable $call): mixed
-    {
-        try {
-            return $call();
-        } catch (RequestException $e) {
-            if ($e->hasResponse() && $e->getResponse()->getStatusCode() === 404) {
-                throw new \RuntimeException(
-                    'The Joomla Web Services API has no redirects route. Core registers it from the '
-                    . 'plg_webservices_redirect plugin, so enable "Web Services - Redirect" in the Joomla plugin manager.',
-                    0,
-                    $e
-                );
-            }
-
-            throw $e;
-        }
     }
 
     private function createContact(array $params): array
